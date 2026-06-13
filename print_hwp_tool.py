@@ -196,6 +196,55 @@ class HwpPrinterEngine:
             except Exception:
                 pass
 
+    def save_as_pdf(self, file_path, output_dir):
+        """Open a single HWP/HWPX file, save it as PDF to output_dir, and close it."""
+        if not self.hwp:
+            if not self.initialize_hwp():
+                return False
+
+        abs_path = os.path.abspath(file_path)
+        base_name = os.path.splitext(os.path.basename(abs_path))[0]
+        pdf_filename = f"{base_name}.pdf"
+        pdf_path = os.path.join(output_dir, pdf_filename)
+        abs_pdf_path = os.path.abspath(pdf_path)
+
+        self.log(f"[진행] 파일 여는 중: {os.path.basename(abs_path)}")
+
+        try:
+            # Open the file
+            opened = self.hwp.Open(abs_path)
+            if not opened:
+                self.log(f"[오류] 파일을 열 수 없습니다: {os.path.basename(abs_path)} (보안 경고 팝업이 활성화되었거나 파일이 손상되었을 수 있습니다.)")
+                return False
+
+            self.log(f"[진행] PDF 변환 및 저장 중... -> {pdf_filename}")
+            
+            # Save as PDF
+            try:
+                self.hwp.HAction.GetDefault("FileSaveAs_S", self.hwp.HParameterSet.HFileOpenSave.HSet)
+                self.hwp.HParameterSet.HFileOpenSave.filename = abs_pdf_path
+                self.hwp.HParameterSet.HFileOpenSave.Format = "PDF"
+                success = self.hwp.HAction.Execute("FileSaveAs_S", self.hwp.HParameterSet.HFileOpenSave.HSet)
+            except Exception as e_action:
+                self.log(f"[알림] HAction 변환 실패, SaveAs 메서드로 재시도합니다. ({e_action})")
+                success = self.hwp.SaveAs(abs_pdf_path, "PDF", "")
+
+            if success:
+                self.log(f"[완료] PDF 변환 완료: {pdf_filename}")
+                return True
+            else:
+                self.log(f"[오류] PDF 변환 실패: {os.path.basename(abs_path)}")
+                return False
+
+        except Exception as e:
+            self.log(f"[오류] 파일 처리 중 예외 발생 ({os.path.basename(abs_path)}): {e}")
+            return False
+        finally:
+            try:
+                self.hwp.Clear(1)
+            except Exception:
+                pass
+
     def shutdown(self):
         """Quit HWP process."""
         if self.hwp:
@@ -266,6 +315,12 @@ class ModernHwpPrinterApp:
         self.style.configure("Primary.TButton", background=self.primary_color, foreground="white")
         self.style.map("Primary.TButton",
             background=[("active", "#4338ca"), ("disabled", "#cbd5e1")],
+            foreground=[("disabled", "#94a3b8")]
+        )
+        
+        self.style.configure("Accent.TButton", background=self.accent_color, foreground="white")
+        self.style.map("Accent.TButton",
+            background=[("active", "#059669"), ("disabled", "#cbd5e1")],
             foreground=[("disabled", "#94a3b8")]
         )
         
@@ -346,8 +401,8 @@ class ModernHwpPrinterApp:
         # ------------------
         options_frame = ttk.Frame(self.root, padding=(20, 5, 20, 5))
         options_frame.grid(row=3, column=0, sticky="nsew")
-        options_frame.columnconfigure(0, weight=2)  # File table takes more space
-        options_frame.columnconfigure(1, weight=1)  # Options take less space
+        options_frame.columnconfigure(0, weight=1)  # File table takes all remaining space
+        options_frame.columnconfigure(1, weight=0, minsize=290)  # Options panel has a fixed minimum width to prevent text clipping
         options_frame.rowconfigure(0, weight=1)
         
         # Left Side of Middle Panel: File Table
@@ -449,10 +504,13 @@ class ModernHwpPrinterApp:
         self.btn_start_print = ttk.Button(settings_container, text="인쇄 시작 ▶", style="Primary.TButton", command=self.start_print_job)
         self.btn_start_print.grid(row=6, column=0, sticky="ew", pady=(15, 5))
         
+        self.btn_save_pdf = ttk.Button(settings_container, text="하위 output 폴더에 PDF로 저장 💾", style="Accent.TButton", command=self.start_pdf_job)
+        self.btn_save_pdf.grid(row=7, column=0, sticky="ew", pady=(5, 5))
+        
         # System Warning Note
         warning_note = "※ 시작 전 한글 프로그램의 경고 팝업창을 모두 닫아주세요."
         lbl_warning = ttk.Label(settings_container, text=warning_note, font=("Malgun Gothic", 8), foreground="#64748b", justify="left", wraplength=220)
-        lbl_warning.grid(row=7, column=0, sticky="w", pady=(5, 0))
+        lbl_warning.grid(row=8, column=0, sticky="w", pady=(5, 0))
 
         # ------------------
         # Bottom Panel: Console Log & Progress Bar (Row 4)
@@ -796,6 +854,7 @@ class ModernHwpPrinterApp:
 
         self.is_printing = True
         self.btn_start_print.config(state="disabled")
+        self.btn_save_pdf.config(state="disabled")
         
         # Start background printing thread
         threading.Thread(
@@ -888,6 +947,7 @@ class ModernHwpPrinterApp:
     def on_print_job_finished(self, success, summary_msg):
         self.is_printing = False
         self.btn_start_print.config(state="normal")
+        self.btn_save_pdf.config(state="normal")
         self.progress_label_var.set("작업 완료")
         
         if success:
@@ -895,15 +955,121 @@ class ModernHwpPrinterApp:
         else:
             messagebox.showerror("인쇄 오류", f"인쇄 작업 중 오류가 발생했습니다.\n\n{summary_msg}")
 
+    def start_pdf_job(self):
+        """Trigger PDF conversion process. Runs in background thread to prevent UI freezing."""
+        if self.is_printing:
+            return
+
+        selected_files = [f for f in self.files_list if f["checked"]]
+        
+        if not selected_files:
+            messagebox.showwarning("경고", "PDF로 변환할 파일을 하나 이상 선택해 주세요.")
+            return
+
+        confirm = messagebox.askyesno(
+            "PDF 변환 시작 확인", 
+            f"선택한 {len(selected_files)}개의 한글 파일을 PDF로 변환하여 저장하시겠습니까?\n"
+            f"저장 위치: 선택된 폴더 하위의 'output' 폴더"
+        )
+        if not confirm:
+            return
+
+        self.is_printing = True
+        self.btn_start_print.config(state="disabled")
+        self.btn_save_pdf.config(state="disabled")
+        
+        # Start background PDF conversion thread
+        threading.Thread(
+            target=self.bg_pdf_process,
+            args=(selected_files,),
+            daemon=True
+        ).start()
+
+    def bg_pdf_process(self, selected_files):
+        """Background PDF conversion handler run in thread."""
+        total_files = len(selected_files)
+        success_count = 0
+        failed_count = 0
+        
+        self.write_log("=========================================")
+        self.write_log(f"PDF 일괄 변환 작업을 시작합니다. (대상 파일 수: {total_files}개)")
+        self.write_log("=========================================")
+
+        # 1. Create output folder
+        output_dir = os.path.join(self.selected_directory, "output")
+        try:
+            if not os.path.exists(output_dir):
+                os.makedirs(output_dir)
+                self.write_log(f"[설정] 변환 출력 폴더를 생성했습니다: {output_dir}")
+        except Exception as e:
+            self.write_log(f"[오류] 변환 출력 폴더 생성 실패: {e}")
+            self.root.after(0, self.on_pdf_job_finished, False, f"출력 폴더 생성 실패 ({e})")
+            return
+
+        # 2. Launch Hancom Office Automation
+        init_ok = self.engine.initialize_hwp()
+        if not init_ok:
+            self.write_log("[오류] 한글 자동화 엔진을 불러오지 못해 PDF 변환이 취소되었습니다.")
+            self.root.after(0, self.on_pdf_job_finished, False, "한글 프로그램 로드 실패")
+            return
+
+        try:
+            for idx, file_info in enumerate(selected_files):
+                # Update UI status to "Converting"
+                self.root.after(0, self.update_file_status, file_info["id"], "PDF 변환 중...")
+                self.progress_label_var.set(f"PDF 변환 진행 중... ({idx+1}/{total_files})")
+                
+                # Execute conversion
+                ok = self.engine.save_as_pdf(file_info["path"], output_dir)
+                
+                if ok:
+                    success_count += 1
+                    self.root.after(0, self.update_file_status, file_info["id"], "완료")
+                else:
+                    failed_count += 1
+                    self.root.after(0, self.update_file_status, file_info["id"], "실패")
+                
+                # Update progress bar
+                progress = int(((idx + 1) / total_files) * 100)
+                self.progress_bar["value"] = progress
+                self.progress_percentage_var.set(f"{progress}%")
+                
+                # Brief delay between jobs
+                time.sleep(0.5)
+
+        finally:
+            # Quit Hwp
+            self.engine.shutdown()
+
+        self.write_log("=========================================")
+        self.write_log(f"PDF 일괄 변환 완료: 성공 {success_count}개, 실패 {failed_count}개")
+        self.write_log("=========================================")
+        
+        self.root.after(0, self.on_pdf_job_finished, True, f"변환 완료: 성공 {success_count}, 실패 {failed_count}")
+
+    def on_pdf_job_finished(self, success, summary_msg):
+        self.is_printing = False
+        self.btn_start_print.config(state="normal")
+        self.btn_save_pdf.config(state="normal")
+        self.progress_label_var.set("작업 완료")
+        
+        if success:
+            messagebox.showinfo("변환 완료", f"PDF 일괄 변환 작업이 완료되었습니다.\n\n{summary_msg}")
+        else:
+            messagebox.showerror("변환 오류", f"PDF 변환 작업 중 오류가 발생했습니다.\n\n{summary_msg}")
+
 
 # ==========================================
 # 3. Headless CLI mode and Script Main
 # ==========================================
 
 def run_cli(args):
-    """Executes HWP print tasks in command line mode."""
+    """Executes HWP print/PDF tasks in command line mode."""
     print("=========================================")
-    print(" HWP / HWPX 일괄 인쇄 CLI 도구")
+    if args.pdf:
+        print(" HWP / HWPX 일괄 PDF 변환 CLI 도구")
+    else:
+        print(" HWP / HWPX 일괄 인쇄 CLI 도구")
     print("=========================================")
     
     dir_path = os.path.abspath(args.dir)
@@ -913,6 +1079,66 @@ def run_cli(args):
         
     engine = HwpPrinterEngine()
     
+    # Gather HWP / HWPX files
+    files = [f for f in os.listdir(dir_path) if f.lower().endswith(('.hwp', '.hwpx'))]
+    if not files:
+        print(f"[알림] 폴더 내에 HWP/HWPX 파일이 존재하지 않습니다: {dir_path}")
+        sys.exit(0)
+        
+    # Sort files according to CLI arguments
+    if args.sort == "name_asc":
+        files.sort(key=lambda x: x.lower())
+    elif args.sort == "name_desc":
+        files.sort(key=lambda x: x.lower(), reverse=True)
+    elif args.sort == "mtime_asc":
+        files.sort(key=lambda x: os.path.getmtime(os.path.join(dir_path, x)))
+    elif args.sort == "mtime_desc":
+        files.sort(key=lambda x: os.path.getmtime(os.path.join(dir_path, x)), reverse=True)
+    elif args.sort == "ctime_asc":
+        files.sort(key=lambda x: os.path.getctime(os.path.join(dir_path, x)))
+    elif args.sort == "ctime_desc":
+        files.sort(key=lambda x: os.path.getctime(os.path.join(dir_path, x)), reverse=True)
+
+    if args.pdf:
+        print(f"[정보] 총 {len(files)}개의 파일을 PDF로 변환합니다.")
+        
+        # 1. Create output folder
+        output_dir = os.path.join(dir_path, "output")
+        try:
+            if not os.path.exists(output_dir):
+                os.makedirs(output_dir)
+                print(f"[설정] 변환 출력 폴더를 생성했습니다: {output_dir}")
+        except Exception as e:
+            print(f"[오류] 변환 출력 폴더 생성 실패: {e}")
+            sys.exit(1)
+
+        # 2. Initialize HWP
+        if not engine.initialize_hwp():
+            print("[오류] 한글 자동화 엔진을 초기화할 수 없습니다.")
+            sys.exit(1)
+
+        success_count = 0
+        failed_count = 0
+
+        try:
+            for f in files:
+                full_path = os.path.join(dir_path, f)
+                print(f"-> [{files.index(f)+1}/{len(files)}] {f} PDF 변환 진행 중...")
+                ok = engine.save_as_pdf(full_path, output_dir)
+                if ok:
+                    success_count += 1
+                else:
+                    failed_count += 1
+                # Brief delay between jobs
+                time.sleep(0.5)
+        finally:
+            engine.shutdown()
+
+        print("=========================================")
+        print(f"PDF 변환 완료: 성공 {success_count}개, 실패 {failed_count}개")
+        print("=========================================")
+        return
+
     # 1. Check printer
     printer_name = args.printer
     available_printers = engine.get_available_printers()
@@ -935,26 +1161,6 @@ def run_cli(args):
             print("인쇄를 취소합니다.")
             sys.exit(1)
 
-    # 2. Gather HWP / HWPX files
-    files = [f for f in os.listdir(dir_path) if f.lower().endswith(('.hwp', '.hwpx'))]
-    if not files:
-        print(f"[알림] 폴더 내에 HWP/HWPX 파일이 존재하지 않습니다: {dir_path}")
-        sys.exit(0)
-        
-    # Sort files according to CLI arguments
-    if args.sort == "name_asc":
-        files.sort(key=lambda x: x.lower())
-    elif args.sort == "name_desc":
-        files.sort(key=lambda x: x.lower(), reverse=True)
-    elif args.sort == "mtime_asc":
-        files.sort(key=lambda x: os.path.getmtime(os.path.join(dir_path, x)))
-    elif args.sort == "mtime_desc":
-        files.sort(key=lambda x: os.path.getmtime(os.path.join(dir_path, x)), reverse=True)
-    elif args.sort == "ctime_asc":
-        files.sort(key=lambda x: os.path.getctime(os.path.join(dir_path, x)))
-    elif args.sort == "ctime_desc":
-        files.sort(key=lambda x: os.path.getctime(os.path.join(dir_path, x)), reverse=True)
-        
     print(f"[정보] 총 {len(files)}개의 파일을 인쇄합니다.")
 
     # 3. Apply Duplex settings
@@ -1005,6 +1211,7 @@ def main():
     parser.add_argument("--duplex", type=str, choices=["default", "simplex", "long", "short"], default="default",
                         help="단면/양면 설정: default(기본값), simplex(단면), long(긴쪽양면), short(짧은쪽양면)")
     parser.add_argument("--copies", type=int, default=1, help="인쇄 부수 (기본값: 1)")
+    parser.add_argument("--pdf", action="store_true", help="인쇄 대신 PDF 파일로 변환하여 'output' 폴더에 저장")
     parser.add_argument("--sort", type=str, choices=["name_asc", "name_desc", "mtime_asc", "mtime_desc", "ctime_asc", "ctime_desc"], default="name_asc",
                         help="CLI 출력 파일 정렬 기준: name_asc(이름 오름차순), name_desc(이름 내림차순), mtime_asc(수정일 오름차순), mtime_desc(수정일 내림차순), ctime_asc(생성일 오름차순), ctime_desc(생성일 내림차순)")
     
