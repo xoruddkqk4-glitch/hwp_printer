@@ -1,8 +1,8 @@
-# HWP / HWPX 일괄 인쇄 유틸리티 (Batch Printer Tool)
+# HWP / HWPX 일괄 인쇄 및 PDF 변환 유틸리티 (Batch Printer & PDF Converter Tool)
 
-이 프로그램은 지정된 폴더 내의 한글 파일(`*.hwp`, `*.hwpx`)들을 탐색하여 한컴오피스 프로그램 제어(COM Automation) 및 윈도우 프린터 설정 제어를 통해 한 번에 일괄 인쇄할 수 있도록 돕는 유틸리티입니다.
+이 프로그램은 지정된 폴더 내의 한글 파일(`*.hwp`, `*.hwpx`)들을 탐색하여 한컴오피스 프로그램 제어(COM Automation) 및 윈도우 프린터 설정 제어를 통해 한 번에 일괄 인쇄 및 PDF 변환을 할 수 있도록 돕는 유틸리티입니다.
 
-단면 인쇄 및 양면 인쇄(긴 쪽/짧은 쪽 넘김) 옵션을 간편하게 설정하여 출력할 수 있습니다.
+단면 인쇄 및 양면 인쇄(긴 쪽/짧은 쪽 넘김) 옵션을 간편하게 설정하여 출력하거나, 일괄적으로 PDF 파일로 변환하여 내보낼 수 있습니다.
 
 ---
 
@@ -31,15 +31,16 @@ python print_hwp_tool.py
 
 * **동작 순서**:
   1. 프로그램 실행 후 우측 상단의 `폴더 선택 🔍` 버튼을 누르고 한글 파일들이 모여있는 폴더를 지정합니다.
-  2. 폴더 내 한글 파일 목록이 표 형식으로 불러와지며, 인쇄하고 싶지 않은 파일은 체크박스를 클릭해 해제할 수 있습니다.
-  3. 우측 설정 카드에서 출력할 **프린터**, **인쇄 부수**, **인쇄 모드(기본설정 / 단면 / 양면-긴쪽 / 양면-짧은쪽)**를 선택합니다.
-  4. `인쇄 시작 ▶` 버튼을 클릭하면, 하단 진행 로그 창에 상세 스텝이 표시되며 인쇄가 순차적으로 실행됩니다.
+  2. 폴더 내 한글 파일 목록이 표 형식으로 불러와지며, 인쇄 또는 PDF 변환을 하고 싶지 않은 파일은 체크박스를 클릭해 해제할 수 있습니다.
+  3. **인쇄할 경우**: 우측 설정 카드에서 출력할 **프린터**, **인쇄 부수**, **인쇄 모드(기본설정 / 단면 / 양면-긴쪽 / 양면-짧은쪽)**를 선택한 후 `인쇄 시작 ▶` 버튼을 클릭합니다.
+  4. **PDF로 변환할 경우**: 우측 설정 카드의 `하위 output 폴더에 PDF로 저장 💾` 버튼을 클릭합니다.
+  5. 하단 진행 로그 창에 상세 스텝이 표시되며 작업이 순차적으로 진행됩니다. (PDF 변환 시 선택한 폴더 하위에 `output` 폴더가 생성되고 그 안에 저장됩니다.)
 
 ### 2. CLI 모드로 실행 (명령줄 일괄 처리)
-백그라운드 작업 스크립트나 배치 파일 등에서 GUI 없이 한 번에 인쇄하려는 경우 사용합니다.
+백그라운드 작업 스크립트나 배치 파일 등에서 GUI 없이 한 번에 인쇄하거나 PDF로 일괄 변환하려는 경우 사용합니다.
 
 ```bash
-# 기본 사용법 (기본 프린터, 기본 설정 사용)
+# 기본 사용법 (기본 프린터, 기본 설정으로 일괄 인쇄)
 python print_hwp_tool.py --dir "C:\Users\user\Documents\TestFolder"
 
 # 양면 인쇄(긴 쪽 넘김), 2부씩 인쇄
@@ -47,6 +48,12 @@ python print_hwp_tool.py --dir "C:\Users\user\Documents\TestFolder" --duplex lon
 
 # 특정 프린터 지정, 단면 인쇄
 python print_hwp_tool.py --dir "C:\Users\user\Documents\TestFolder" --printer "HP OfficeJet 8710" --duplex simplex
+
+# 인쇄 대신 PDF 파일로 일괄 변환하여 하위 'output' 폴더에 저장
+python print_hwp_tool.py --dir "C:\Users\user\Documents\TestFolder" --pdf
+
+# 정렬 기준을 변경하여(예: 파일 이름 내림차순) PDF로 일괄 변환
+python print_hwp_tool.py --dir "C:\Users\user\Documents\TestFolder" --pdf --sort name_desc
 ```
 
 * **CLI 옵션 설명**:
@@ -54,6 +61,8 @@ python print_hwp_tool.py --dir "C:\Users\user\Documents\TestFolder" --printer "H
   - `--printer "[프린터명]"`: 사용할 프린터 명칭 (생략 시 기본 프린터 사용)
   - `--duplex [default|simplex|long|short]`: 단면/양면 설정 (생략 시 기본 프린터 기본값 적용)
   - `--copies [숫자]`: 인쇄 부수 (생략 시 1부)
+  - `--pdf`: 인쇄 대신 PDF 파일로 변환하여 대상 폴더 하위의 `output` 폴더에 저장
+  - `--sort [name_asc|name_desc|mtime_asc|mtime_desc|ctime_asc|ctime_desc]`: 파일 처리 정렬 기준 (기본값: name_asc)
 
 ---
 
